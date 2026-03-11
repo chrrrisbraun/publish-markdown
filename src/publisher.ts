@@ -10,6 +10,37 @@ function slugify(name: string): string {
 		.replace(/^-|-$/g, "");
 }
 
+// Slugify a filename while preserving its extension
+function slugifyFilename(filename: string): string {
+	const dot = filename.lastIndexOf(".");
+	if (dot === -1) return slugify(filename);
+	return slugify(filename.slice(0, dot)) + filename.slice(dot).toLowerCase();
+}
+
+// Convert an ArrayBuffer to a base64 string
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+	const bytes = new Uint8Array(buffer);
+	const chunks: string[] = [];
+	const chunkSize = 0x8000;
+	for (let i = 0; i < bytes.length; i += chunkSize) {
+		chunks.push(String.fromCharCode(...bytes.subarray(i, i + chunkSize)));
+	}
+	return btoa(chunks.join(""));
+}
+
+// Replace Obsidian ![[image]] embeds with standard <img> tags pointing to the deployed path
+function resolveImageEmbeds(markdown: string): string {
+	return markdown.replace(
+		/!\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g,
+		(_, filename: string, alt?: string) => {
+			const name = filename.trim().split("/").pop() ?? filename.trim();
+			const slug = slugifyFilename(name);
+			const altText = alt?.trim() ?? name;
+			return `![${altText}](/${slug})`;
+		}
+	);
+}
+
 // Replace Obsidian [[wikilinks]] with relative HTML links
 function resolveWikilinks(markdown: string): string {
 	return markdown.replace(
@@ -49,6 +80,7 @@ function renderHtmlPage(title: string, body: string, isIndex = false): string {
     nav a:hover { text-decoration: underline; }
     h1, h2, h3, h4 { line-height: 1.3; margin-top: 2rem; }
     a { color: #0070f3; }
+    img { max-width: 100%; height: auto; border-radius: 4px; }
     pre {
       background: #f5f5f5;
       border: 1px solid #e5e5e5;
@@ -100,6 +132,7 @@ export interface DeploymentResult {
 interface VercelFile {
 	file: string;
 	data: string;
+	encoding?: "base64";
 }
 
 export class VercelPublisher {
@@ -112,10 +145,25 @@ export class VercelPublisher {
 		const deployFiles: VercelFile[] = [];
 		const noteLinks: { slug: string; name: string }[] = [];
 
+		// Collect all image files referenced across the notes
+		const images = await this.collectImages(files);
+
+		// Read each image and add as a base64-encoded file
+		for (const [slug, imageFile] of images) {
+			const binary = await this.app.vault.readBinary(imageFile);
+			deployFiles.push({
+				file: slug,
+				data: arrayBufferToBase64(binary),
+				encoding: "base64",
+			});
+		}
+
+		// Convert each note to HTML
 		for (const file of files) {
 			const markdown = await this.app.vault.read(file);
-			const processed = resolveWikilinks(markdown);
-			const bodyHtml = await marked(processed);
+			const withImages = resolveImageEmbeds(markdown);
+			const withLinks = resolveWikilinks(withImages);
+			const bodyHtml = await marked(withLinks);
 			const slug = slugify(file.basename);
 
 			deployFiles.push({
@@ -147,6 +195,31 @@ ${noteLinks
 		return this.deploy(deployFiles);
 	}
 
+	// Find all ![[image]] embeds in the given notes and resolve them to vault files
+	private async collectImages(files: TFile[]): Promise<Map<string, TFile>> {
+		const images = new Map<string, TFile>();
+		const embedRegex = /!\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]/g;
+
+		for (const file of files) {
+			const markdown = await this.app.vault.read(file);
+			let match: RegExpExecArray | null;
+			embedRegex.lastIndex = 0;
+			while ((match = embedRegex.exec(markdown)) !== null) {
+				const linkpath = match[1]?.trim();
+				if (!linkpath) continue;
+				const imageFile = this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path);
+				if (imageFile) {
+					const slug = slugifyFilename(imageFile.name);
+					if (!images.has(slug)) {
+						images.set(slug, imageFile);
+					}
+				}
+			}
+		}
+
+		return images;
+	}
+
 	private async deploy(files: VercelFile[]): Promise<DeploymentResult> {
 		const teamParam = this.settings.teamId
 			? `?teamId=${encodeURIComponent(this.settings.teamId)}`
@@ -173,14 +246,15 @@ ${noteLinks
 			id: string;
 			error?: { message?: string };
 		}
-		const data = response.json as VercelResponse;
+		const data = response.json as VercelResponse | undefined;
 
 		if (response.status < 200 || response.status >= 300) {
 			throw new Error(
-				data.error?.message ?? `Vercel API error: ${response.status}`
+				data?.error?.message ?? `Vercel API error: ${response.status}`
 			);
 		}
 
+		if (!data) throw new Error("Empty response from Vercel API");
 		return { url: data.url, id: data.id };
 	}
 }
