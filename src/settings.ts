@@ -5,14 +5,12 @@ export interface PublishMarkdownSettings {
 	apiToken: string;
 	projectName: string;
 	teamId: string;
-	publishFolder: string;
 }
 
 export const DEFAULT_SETTINGS: PublishMarkdownSettings = {
 	apiToken: "",
 	projectName: "my-notes",
 	teamId: "",
-	publishFolder: "",
 };
 
 export class PublishSettingTab extends PluginSettingTab {
@@ -63,16 +61,5 @@ export class PublishSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName("Publish folder")
-			.setDesc("Vault folder whose notes will be published. Leave blank to publish the entire vault.")
-			.addText((text) =>
-				text
-					.setValue(this.plugin.settings.publishFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.publishFolder = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
 	}
 }
