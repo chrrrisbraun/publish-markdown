@@ -42,10 +42,33 @@ export default class PublishMarkdownPlugin extends Plugin {
 	private async publishNote(file: TFile) {
 		if (!this.validateSettings()) return;
 
-		new Notice(`Publishing "${file.basename}"…`);
+		// Replace an existing entry with the same note name, or add a new one
+		const existingIndex = this.settings.publishedNotes.findIndex(
+			(p) => p.split("/").pop()?.replace(/\.md$/i, "") === file.basename
+		);
+		if (existingIndex >= 0) {
+			this.settings.publishedNotes[existingIndex] = file.path;
+		} else {
+			this.settings.publishedNotes.push(file.path);
+		}
+		await this.saveSettings();
+
+		// Resolve all tracked paths to vault files, skipping any that no longer exist
+		const filesToPublish: TFile[] = [];
+		for (const path of this.settings.publishedNotes) {
+			const f = this.app.vault.getAbstractFileByPath(path);
+			if (f instanceof TFile) filesToPublish.push(f);
+		}
+
+		const total = filesToPublish.length;
+		const isNew = existingIndex < 0;
+		new Notice(
+			`${isNew ? "Adding" : "Updating"} "${file.basename}" — deploying ${total} note${total === 1 ? "" : "s"}…`
+		);
+
 		try {
 			const publisher = new VercelPublisher(this.app, this.settings);
-			const result = await publisher.publishFiles([file]);
+			const result = await publisher.publishFiles(filesToPublish);
 			new Notice(`Published to https://${result.url}`, 8000);
 		} catch (err) {
 			console.error("[publish-markdown]", err);

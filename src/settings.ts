@@ -5,12 +5,14 @@ export interface PublishMarkdownSettings {
 	apiToken: string;
 	projectName: string;
 	teamId: string;
+	publishedNotes: string[]; // vault file paths of all notes that have been published
 }
 
 export const DEFAULT_SETTINGS: PublishMarkdownSettings = {
 	apiToken: "",
 	projectName: "my-notes",
 	teamId: "",
+	publishedNotes: [],
 };
 
 export class PublishSettingTab extends PluginSettingTab {
